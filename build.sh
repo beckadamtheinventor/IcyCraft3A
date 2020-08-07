@@ -1,7 +1,7 @@
 #!/bin/bash
 #----------------------------------------
 #Put your program name in place of "DEMO"
-name='DEMO.8xp'
+name='ICYCRAFT.8xp'
 #----------------------------------------
 
 mkdir "bin" || echo ""

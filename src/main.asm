@@ -3,38 +3,36 @@
 include 'include/ez80.inc'
 include 'include/tiformat.inc'
 include 'include/ti84pceg.inc'
-format ti executable "DEMO"
+format ti executable "IC3CRAFT"
 
 kb_Data:=$F50010
 tiflags:=$D00080
 
 gen_map_temp:=ti.pixelShadow
-player_inv_data:=gen_map_temp+64
-player_data:=player_inv_data+72
-chest_inv_data:=player_data+64
+player_data:=gen_map_temp+64
+player_inv_data:=player_data+64
+chest_inv_data:=player_inv_data+72
 game_flags:=chest_inv_data+72
 map_ptr:=game_flags+1
 map_len:=map_ptr+3
 game_time:=map_len+3
-world_data:=game_time+3
+tex_ptrs:=game_time+3
+world_file:=tex_ptrs+768
+behavior_pack:=world_file+8
+texture_pack:=behavior_pack+8
+world_data:=texture_pack+8
 ;next:=world_data+$FFE8
 
-macro voidptr adress, amount
-	ld hl,adress
-	ld bc,amount-1
-	push hl
-	pop de
-	inc de
-	xor a,a
-	ld (hl),a
-	ldir
-end macro
+assert world_data < ti.pixelShadow+3578
 
-
+o_player_x:=0
+o_player_y:=3
+o_player_z:=6
+o_player_inv:=64
 
 init:
 	call libload_load
-	jr z,gfxInit
+	jr z,main_init
 	call ti.HomeUp
 	ld hl,.needlibload
 	call ti.PutS
@@ -52,7 +50,13 @@ GetCSC:
 	or a,a
 	jr z,GetCSC
 	ret
-gfxInit:
+main_init:
+
+	or a,a
+	sbc hl,hl
+	add hl,sp
+	ld (ErrorSP),hl	
+
 	call ti.HomeUp
 	call ti.RunIndicOff
 	call gfx_Begin
@@ -60,17 +64,18 @@ gfxInit:
 	ld l,1
 	push hl
 	call gfx_SetDraw
-	pop hl
 	ld l,0
-	push hl
+	ex (sp),hl
 	call gfx_SetTextTransparentColor
 	call gfx_SetTransparentColor
 	call gfx_SetTextBGColor
-	pop hl
 	ld l,$FF
-	push hl
+	ex (sp),hl
 	call gfx_SetTextFGColor
 	pop hl
+
+	call load_packs
+	call load_textures
 
 menu:
 menu_draw:
@@ -90,7 +95,7 @@ menu_loop:
 	inc hl
 	ld a,(hl)
 	bit 7,a
-	jr nz,.clear
+	jr nz,.select2
 ; Group 3
 	inc hl
 	inc hl
@@ -109,37 +114,77 @@ menu_loop:
 	ld a,(hl)
 	bit 6,a
 	jr nz,.exit
+	bit 0,a
+	jr nz,.select
 ; Group 7
 	inc hl
 	inc hl
-	ld iy,player_data
 	ld a,(hl)
 	bit 0,a
-	call nz,moveDown
-	bit 1,a
-	call nz,moveLeft
-	bit 2,a
-	call nz,moveRight
+	jr z,.notdown
+
+.notdown:
 	bit 3,a
-	call nz,moveUp
+	jr z,.notup
+	
+.notup:
+	bit 2,a
+	jr z,.notright
+	
+.notright:
+	bit 1,a
+	jr z,.notleft
+	
+.notleft:
 	and a,$F
 	jp nz,menu_draw
 	jp menu_loop
 .select:
+	call main
+	jp menu_draw
+.select2:
 	
 	jp menu_draw
 .clear:
 	
 	jp menu_draw
 .exit:
-	jp normal
+	jp full_exit
 
 main:
-main_draw:
+	ret                ; this will be smc'd into a NOP once data is properly loaded
+main_loop:
 	call gfx_ZeroScreen
 	call draw_map_tiles
+	or a,a
+	sbc hl,hl
+	push hl
+	push hl
+	ld hl,Strings.X
+	push hl
+	call gfx_PrintStringXY
+	pop bc
+	pop bc
+	pop bc
+	ld ix,player_data
+	ld bc,(ix+o_player_x)
+	ld de,(ix+o_player_y)
+	or a,a
+	sbc hl,hl
+	push hl
+	push de
+	push hl
+	push bc
+	call gfx_PrintInt
+	pop bc
+	ld hl,Strings.Y
+	ex (sp),hl
+	call gfx_PrintString
+	pop hl
+	call gfx_PrintInt
+	pop bc
+	pop bc
 	call gfx_SwapDraw
-main_loop:
 	ld iy,player_data
 .keywait:
 	call kb_Scan
@@ -171,80 +216,448 @@ main_loop:
 ; Group 7
 	inc hl
 	inc hl
-	ld iy,player_data
+	ld bc,(iy+o_player_y)
+	ld de,(iy+o_player_x)
 	ld a,(hl)
 	bit 0,a
-	call nz,moveDown
-	bit 1,a
-	call nz,moveLeft
-	bit 2,a
-	call nz,moveRight
+	jr z,.notdown
+	inc bc
+.notdown:
 	bit 3,a
-	call nz,moveUp
-	and a,$F
-	jp nz,main_draw
+	jr z,.notup
+	dec bc
+.notup:
+	bit 2,a
+	jr z,.notright
+	inc de
+.notright:
+	bit 1,a
+	jr z,.notleft
+	dec de
+.notleft:
+	ld (iy+o_player_y),bc
+	ld (iy+o_player_x),de
 	jp main_loop
 .exit:
 	jp wait_key_unpress
-normal:
+
+error_draw:
+	call gfx_ZeroScreen
+	ld bc,0
+	push bc
+	push bc
+	ld bc,Errors.Error
+	push bc
+	call gfx_PrintStringXY
+	pop bc
+	pop hl
+	pop bc
+	ld c,10
+	push bc
+	push hl
+	ld bc,Errors.UnknownError
+ErrorCode:=$-3
+	push bc
+	call gfx_PrintStringXY
+	pop bc
+	pop bc
+	pop bc
+	jp gfx_SwapDraw
+
+error_to_menu:
+	ld sp,(ErrorSP)
+	call error_draw
+	call WaitKey
+	jp menu
+
+error_exit:
+	ld sp,0
+ErrorSP:=$-3
+	call error_draw
+	call WaitKey
+full_exit:
 	call ti_CloseAll
 	call gfx_End
+	ld hl,ti.pixelShadow
+	ld bc,69090
+	call memset
 	ld iy,tiflags
-	voidptr ti.pixelShadow, 69090
 	call ti.RunIndicOn
 	call ti.DrawStatusBar
 	jp ti.HomeUp
 
-wait_key_unpress:
-	push hl
-	call kb_Scan
-	pop hl
-	ld a,(hl)
-	or a,a
-	jr nz,$-8
-	ret
-
-
-moveDown:
-	push af
-	inc (iy+2)
-	jr nc,.noc
-	inc (iy+3)
-.noc:
-	pop af
-	ret
-
-moveUp:
-	push af
-	dec (iy+2)
-	jr nc,.noc
-	dec (iy+3)
-.noc:
-	pop af
-	ret
-
-moveRight:
-	push af
-	inc (iy)
-	jr nc,.noc
-	inc (iy+1)
-.noc:
-	pop af
-	ret
-
-moveLeft:
-	push af
-	dec (iy)
-	jr nc,.noc
-	dec (iy+1)
-.noc:
-	pop af
-	ret
 
 draw_map_tiles:
+	ld ix,player_data
+	ld hl,(ix+o_player_x)
+	call .sub4div8and7
+	ld c,a
+	ld hl,(ix+o_player_y)
+	call .sub4div8and7
+	ld b,a
+	ld a,c
+	ld c,0
+	ret
+	
+.sub4div8and7:
+	dec hl
+	dec hl
+	dec hl
+	dec hl ;X-4
+	rr h
+	rr l
+	rr h
+	rr l
+	rr h
+	rr l
+	ld a,l
+	and a,7 ;get chunk coordinate
+	ret
+
+draw_menu:
+	call draw_background
+	ld l,3
+	push hl
+	dec l
+	push hl
+	call gfx_SetTextScale
+	pop hl
+	ld l,$1E
+	ex (sp),hl
+	call gfx_SetTextFGColor
+	ld hl,20
+	ex (sp),hl
+	ld hl,100
+	push hl
+	ld hl,Strings.MenuTitle
+	push hl
+	call gfx_PrintStringXY
+	pop hl
+	pop hl
+	pop hl
+	ld l,1
+	push hl
+	push hl
+	call gfx_SetTextScale
+	pop hl
+	ld l,$FF
+	ex (sp),hl
+	call gfx_SetTextFGColor
+	pop hl
+	ret
+
+draw_background:
+	ret         ; will be smc'd once textures are loaded to avoid a crash if the texture pack is not found
+	ld hl,2     ; Scale factor
+	push hl
+	push hl
+	ld l,0      ; X=0, Y=0
+	push hl
+	pop ix
+	add ix,sp   ; (ix-6) --> X, (ix-3) --> Y
+	push hl
+	push hl
+	ld hl,(tex_ptrs+9) ; texture 3, used for the background
+	push hl
+	ld a,15
+	ld (.sva2),a
+	ld a,20
+.loop:
+	ld (.sva),a
+	call gfx_ScaledTransparentSprite
+	ld bc,16
+	ld hl,(ix-6)
+	add hl,bc
+	ld (ix-6),hl
+	ld a,0
+.sva:=$-1
+	dec a
+	jr nz,.loop
+	or a,a
+	sbc hl,hl
+	ld (ix-6),hl
+	ld hl,(ix-3)
+	add hl,bc
+	ld (ix-3),hl
+	ld a,0
+.sva2:=$-1
+	dec a
+	ld (.sva2),a
+	ld a,20
+	jr nz,.loop
+.exit:
+	lea hl,ix+6
+	ld sp,hl
+	ret
+
+; configs
+load_packs:
+	ld hl,Modes.R
+	push hl
+	ld hl,Files.PackFile
+	push hl
+	call ti_Open
+	pop bc
+	pop bc
+	or a,a
+	jr z,.default
+	ld l,a
+	push hl
+	call ti_GetDataPtr
+	ld de,world_file
+	ld bc,24
+	ldir
+	call ti_Close
+	pop hl
+	ret
+.default:
+	ld hl,Files.DefaultWorldFile
+	ld de,world_file
+	ld bc,24
+	ldir
+	ret
+
+load_textures:
+	ld hl,Modes.R
+	push hl
+	ld hl,texture_pack
+	push hl
+	call ti_Open
+	pop bc,bc
+	or a,a
+	jr nz,.found
+	ld hl,Errors.TexturePackFile
+	ld (ErrorCode),hl
+	jp error_to_menu
+.found:
+	ld l,a
+	push hl
+	call ti_GetSize
+	ex (sp),hl
+	push hl
+	call ti_GetDataPtr
+	ex (sp),hl
+	push hl
+	call ti_Close
+	pop bc,de,hl
+	add hl,de
+	ld (.filemax),hl
+	ld hl,tex_ptrs
+.tex_loop:
+	ld (hl),de
+	inc hl
+	inc hl
+	inc hl
+	ex hl,de
+	ld bc,66
+	add hl,bc
+	ld bc,0
+.filemax:=$-3
+	or a,a
+	sbc hl,bc
+	add hl,bc
+	ex hl,de
+	jr c,.tex_loop
+	xor a,a
+	ld (draw_background),a  ; textures are loaded
+	ld (main),a
+	ret
+
+load_behaviours:
+	ret
+
+; world saving/loading
+
+load_world_layer:
+	ld hl,Modes.R
+	push hl
+	ld hl,world_file
+	push hl
+	call ti_Open
+	pop bc
+	pop bc
+	or a,a
+	jp z,generate_world_layer
+	ld l,a
+	push hl
+	call ti_GetDataPtr
+	ld (.fileptr),hl
+	call ti_GetSize
+	push hl
+	pop bc
+	ld de,world_data
+	ld hl,0
+.fileptr:=$-3
+	ldir
+	ld (world_end_ptr),de
+	pop bc
+	
+	ret
+
+save_world_layer:
+	ret
+
+; return nz if found, z if not found. HL = chunk
+get_chunk:
+	ld hl,world_data
+.loop:
+	ld a,0
+.x:=$-1
+	cp a,(hl)
+	inc hl
+	jr nz,.next
+	ld a,0
+.y:=$-1
+	cp a,(hl)
+	jr z,.found
+.next:
+	inc hl
+	ld bc,0
+world_end_ptr:=$-3
+	or a,a
+	sbc hl,bc
+	add hl,bc
+	jr c,.loop
+	xor a,a
+	sbc hl,hl
+	ret
+.found:
+	dec hl
+	xor a,a
+	inc a
+	ret
+
+; world generation
+
+generate_world_layer:
+	ret
+
+; X,Y must already be set in gen_map_temp
+; chunk_seed = world_seed bitxor (X + Y*256) * 8
+generate_chunk:
+	xor a,a
+	ld (gen_map_temp+2),a
+	ld hl,(gen_map_temp)
+	add hl,hl
+	add hl,hl
+	add hl,hl               ; multiply by 8
+	ex hl,de
+	ld hl,chunk_seed+1
+	ld (hl),de
+	dec hl
+	ld de,world_seed
+	ld a,(gen_map_temp+1)
+	rlca
+	rlca
+	rlca
+	and a,7
+	ld (hl),a
+	ld b,4
+.xorloop:
+	ld a,(de)
+	xor a,(hl)
+	ld (hl),a
+	inc hl
+	inc de
+	djnz .xorloop
+	
+	ld de,(world_end_ptr)
+	ld bc,66
+	ldir
+	ret
+world_seed:      ;32-bit world seed
+	db 4 dup 0
+chunk_seed:      ;32-bit chunk seed
+	db 4 dup 0
+
+
+; utility
+
+HashString:
+	ex hl,de
+	ld hl,.temp
+	xor a,a
+.clear:
+	ld b,4
+	ld (hl),a
+	djnz .clear
+.outer:
+	ld hl,.temp
+	ld b,4
+.inner:
+	ld a,(de)
+	inc de
+	or a,a
+	jr z,.exit
+	add a,(hl)
+	ld (hl),a
+	inc hl
+	jr nc,.cont
+	inc (hl)
+.cont:
+	djnz .inner
+	jr .outer
+.exit:
+	ld hl,.temp
+	ret
+.temp:           ;32-bit hash of string
+	db 4 dup 0
+
+WaitKeyFull:
+	call WaitKey
+
+wait_key_unpress:
+	call kb_AnyKey
+	jr nz,wait_key_unpress
+	ret
+
+WaitKey:
+	call kb_AnyKey
+	jr z,WaitKey
+	ret
+
+memset:
+	push hl
+	pop de
+	inc de
+	xor a,a
+	ld (hl),a
+	ldir
+	ret
+
+GetKey:
+	call kb_Scan
+	ld hl,kb_Data+2
+.loop:
+	cp a,(hl)
+	jr nz,.loop
+	ld b,7
+	ld c,49
+.scanloop:
+	ld a,(hl)
+	or a,a
+	jr nz,.keyispressed
+	inc hl
+	inc hl
+	ld a,c
+	sub a,8
+	ld c,a
+	djnz .scanloop
+	xor a,a
+	ret
+.keyispressed:
+	ld b,8
+.keybitloop:
+	rrca
+	jr c,.this
+	inc c
+	djnz .keybitloop
+.this:
+	ld a,c
 	ret
 
 
 include 'arc_unarc.asm'
 include 'load_libs.asm'
 
+include 'data.asm'
