@@ -1,12 +1,10 @@
 
 
-include 'include/ez80.inc'
-include 'include/tiformat.inc'
-include 'include/ti84pceg.inc'
+include 'include/macros.inc'
 format ti executable "IC3CRAFT"
 
 kb_Data:=$F50010
-tiflags:=$D00080
+
 
 gen_map_temp:=ti.pixelShadow
 player_data:=gen_map_temp+64
@@ -30,26 +28,8 @@ o_player_y:=3
 o_player_z:=6
 o_player_inv:=64
 
-init:
-	call libload_load
-	jr z,main_init
-	call ti.HomeUp
-	ld hl,.needlibload
-	call ti.PutS
-	xor a,a
-	ld (ti.curCol),a
-	inc a
-	ld (ti.curRow),a
-	call ti.PutS
-	jr GetCSC
-.needlibload:
-	db "Need libLoad",0
-	db "tiny.cc/clibs",0
-GetCSC:
-	call ti.GetCSC
-	or a,a
-	jr z,GetCSC
-	ret
+clibs_program
+
 main_init:
 
 	or a,a
@@ -278,14 +258,8 @@ ErrorSP:=$-3
 full_exit:
 	call ti_CloseAll
 	call gfx_End
-	ld hl,ti.pixelShadow
-	ld bc,69090
-	call memset
-	ld iy,tiflags
-	call ti.RunIndicOn
-	call ti.DrawStatusBar
-	jp ti.HomeUp
 
+end_program
 
 draw_map_tiles:
 	ld ix,player_data
@@ -364,7 +338,7 @@ draw_background:
 	ld a,20
 .loop:
 	ld (.sva),a
-	call gfx_ScaledTransparentSprite
+	call gfx_ScaledTransparentSprite_NoClip
 	ld bc,16
 	ld hl,(ix-6)
 	add hl,bc
@@ -656,8 +630,6 @@ GetKey:
 	ld a,c
 	ret
 
-
 include 'arc_unarc.asm'
-include 'load_libs.asm'
 
 include 'data.asm'
