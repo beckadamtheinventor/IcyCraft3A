@@ -24,6 +24,8 @@ Files:
 		db "ICYtxp00"
 	.PackFile:
 		db "ICYpacks"
+	.TempFile:=$+1
+		db ti.AppVarObj,"__icytmp",0
 
 Modes:
 	.R:

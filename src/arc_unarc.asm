@@ -2,7 +2,7 @@
 ; in the case of a garbage collect
 ; returns nz if okay, z if garbage collect
 ; derived from https://github.com/calc84maniac/tiboyce/blob/350e414dfc345d5e754eb87c1b87bc4e06131e71/tiboyce.asm#L468
-cesium_Arc_Unarc:
+_Arc_Unarc:
 	call	ti.ChkFindSym
 	ret	c
 	ex	de,hl

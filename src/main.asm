@@ -18,7 +18,8 @@ tex_ptrs:=game_time+3
 world_file:=tex_ptrs+768
 behavior_pack:=world_file+8
 texture_pack:=behavior_pack+8
-world_data:=texture_pack+8
+world_chunk_gen_flags:=texture_pack+8
+world_data:=world_chunk_gen_flags+32
 ;next:=world_data+$FFE8
 
 assert world_data < ti.pixelShadow+3578
@@ -133,6 +134,7 @@ menu_loop:
 
 main:
 	ret                ; this will be smc'd into a NOP once data is properly loaded
+	call load_world_layer
 main_loop:
 	call gfx_ZeroScreen
 	call draw_map_tiles
@@ -258,19 +260,30 @@ ErrorSP:=$-3
 full_exit:
 	call ti_CloseAll
 	call gfx_End
-
+	
+	ld hl,ti.pixelShadow
+	ld bc,69090
+	call ti._memclear
 end_program
 
+
 draw_map_tiles:
+	push ix
 	ld ix,player_data
-	ld hl,(ix+o_player_x)
-	call .sub4div8and7
-	ld c,a
-	ld hl,(ix+o_player_y)
-	call .sub4div8and7
-	ld b,a
-	ld a,c
-	ld c,0
+	ld b,(ix+o_player_y)
+	ld c,8
+	mlt bc
+	ld a,(ix+o_player_x)
+	call ti.AddHLAndA
+	ld hl,world_data
+	add hl,bc
+	ld c,(ix+o_player_y)
+	ld b,8
+	mlt bc
+	add hl,bc
+	ld a,(ix+o_player_x)
+	call ti.AddHLAndA
+	pop ix
 	ret
 	
 .sub4div8and7:
@@ -286,6 +299,12 @@ draw_map_tiles:
 	rr l
 	ld a,l
 	and a,7 ;get chunk coordinate
+	ret
+
+;input b=x,c=y
+get_map:
+	ld hl,world_data
+	
 	ret
 
 draw_menu:
@@ -443,6 +462,9 @@ load_behaviours:
 ; world saving/loading
 
 load_world_layer:
+	ld hl,world_chunk_gen_flags ;clear old data
+	ld bc,65536+32
+	call ti._memclear
 	ld hl,Modes.R
 	push hl
 	ld hl,world_file
@@ -455,21 +477,51 @@ load_world_layer:
 	ld l,a
 	push hl
 	call ti_GetDataPtr
-	ld (.fileptr),hl
-	call ti_GetSize
+	ex (sp),hl
 	push hl
+	call ti_Close
 	pop bc
-	ld de,world_data
-	ld hl,0
-.fileptr:=$-3
-	ldir
-	ld (world_end_ptr),de
-	pop bc
-	
+	ld hl,world_chunk_gen_flags
+	push hl
+	call _zx7_Decompress
+	pop bc,bc
 	ret
 
 save_world_layer:
-	ret
+	ld hl,65536+32
+	push hl
+	ld hl,.worldLength
+	push hl
+	ld hl,$D52C00
+	push hl
+	ld hl,world_chunk_gen_flags
+	push hl
+	call _zx7_Compress
+	pop bc,bc,bc,bc
+	ld hl,Modes.W
+	push hl
+	ld hl,Files.TempFile
+	push hl
+	call ti_Open
+	pop bc,bc
+	or a,a
+	ret z
+	ld c,a
+	push bc
+	ld hl,0
+.worldLength:=$-3
+	push hl
+	ld hl,1
+	push hl
+	ld hl,$D52C00
+	push hl
+	call ti_Write
+	pop bc,bc,bc
+	call ti_Close
+	pop bc
+	ld hl,Files.TempFile-1
+	call ti.Mov9ToOP1
+	jp _Arc_Unarc
 
 ; return nz if found, z if not found. HL = chunk
 get_chunk:
@@ -631,5 +683,6 @@ GetKey:
 	ret
 
 include 'arc_unarc.asm'
-
+include 'zx7_Decompress.asm'
+include 'compressor.asm'
 include 'data.asm'
