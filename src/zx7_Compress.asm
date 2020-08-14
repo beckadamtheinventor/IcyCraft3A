@@ -4,22 +4,23 @@ MAX_LEN    := 65536
 
 ;zx7_Compress(void *dest,void *src,int *len,int src_len);
 _zx7_Compress:
-	ld hl,-9
+	ld hl,-15
 	call ti._frameset
 	xor a,a
 	sbc hl,hl
-	ld (input_index),hl
 	ld (output_index),hl
+	inc hl
+	ld (input_index),hl
 	inc a
 	ld (bit_mask),a
-	ld hl,(ix+6)
+	ld hl,(ix+9)
 	ld a,(hl)
 	call _write_byte
 .loop:
 	call _get_match
 
 	ld a,(best_cost)
-	or a,a
+	cp a,$FF
 	jr nz,.check_cost
 
 .literal:
@@ -27,10 +28,12 @@ _zx7_Compress:
 	call _write_bit
 	ld hl,0
 input_index:=$-3
+	ld bc,(ix+9)
+	add hl,bc
+	inc bc
+	ld (input_index),bc
 	ld a,(hl)
-	ex hl,de
 	call _write_byte
-	ex hl,de
 	jq .next
 
 .check_cost:
@@ -89,13 +92,28 @@ input_index:=$-3
 	call _write_byte
 
 .advancepattern:
+	ld hl,(ix-9)
+	ld de,-128
+	add hl,de
+	rl l
+	rl h
+	ld c,h
+	ld b,4
+.patternlenloop:
+	ld a,c
+	and a,1
+	call _write_bit
+	rr c
+	djnz .patternlenloop
+
 	ld hl,(input_index)
 	ld bc,(ix-6)
 	add hl,bc
 	ld (input_index),hl
 
 .next:
-	ld bc,(ix+12)
+	ld hl,(input_index)
+	ld bc,(ix+15)
 	or a,a
 	sbc hl,bc
 	jq c,.loop
@@ -114,7 +132,7 @@ input_index:=$-3
 	call _write_bit
 
 	ld de,(input_index)
-	ld hl,(ix+9)
+	ld hl,(ix+12)
 	ld (hl),de ;*len = input_index
 
 	ld sp,ix
@@ -122,30 +140,41 @@ input_index:=$-3
 	ret
 
 ;output (ix-6) = match_len, (ix-9) = match_offset.
-;uses (ix-3) as scrap
+;uses (ix-3), (ix-12), and (ix-15) as scrap
 _get_match:
-	xor a,a
-	sbc hl,hl
+	ld a,$FF
 	ld (best_cost),a
+	or a,a
+	sbc hl,hl
 	ld (ix-6),hl
 	ld (ix-9),hl
 	ld hl,MAX_OFFSET
 	ld bc,(input_index)
 	or a,a
 	sbc hl,bc
-	jr c,.index_lt_maxoffset
+	jr nc,.index_lt_maxoffset
 	ld bc,MAX_OFFSET
 .index_lt_maxoffset:
 	;bc = (input_index>MAX_OFFSET?MAX_OFFSET:input_index)
-	ld hl,(ix+6)
-	add hl,bc
+	ld hl,(ix+9)
+	ld de,(input_index)
+	add hl,de
+	ld (ix-15),hl
 	ld (ix-3),hl
+	ld (ix-12),bc
+	jr .outer_loop_entry
+.outer_loop:
+	ld hl,(ix-3)
+	ld bc,(ix-12)
+.outer_loop_entry:
 	ld a,(hl)
 	dec hl
 	cpdr
 	ret nz
-	push bc
-	ld de,(ix+6)
+	ret po
+	ld (ix-3),hl
+	ld (ix-12),bc
+	ld de,(ix-15)
 	ld bc,MAX_LEN
 .loop:
 	ld a,(de)
@@ -157,9 +186,9 @@ _get_match:
 	ld hl,MAX_LEN
 	or a,a
 	sbc hl,bc ;hl = match_len
-	pop de
 	push hl
-	ld hl,(ix-3) ;hl = &src[input_index]
+	ld hl,(ix-15) ;hl = &src[input_index]
+	ld de,(ix-3) ;de = match_ptr
 	or a,a
 	sbc hl,de ;hl = &src[input_index] - match_ptr --> match_offset
 	pop de
@@ -169,10 +198,8 @@ _get_match:
 	ld (current_cost),a
 	pop hl ;match_len
 	push hl
-	ld a,0
+	ld a,$FF
 best_cost:=$-1
-	or a,a
-	jr z,.new_cost
 	call ti._imul_b ;match_len*best_cost
 	ld bc,0
 current_cost:=$-3
@@ -180,14 +207,12 @@ current_cost:=$-3
 	sbc hl,bc
 	pop hl ;match_len
 	pop de ;match_offset
-	jp nc,_get_match
+	jp c,.outer_loop
 .new_cost:
-	ld a,c
-	ld (best_cost),a
+	ld (best_cost),bc
 	ld (ix-6),hl ;match_len
 	ld (ix-9),de ;match_offset
-	jp _get_match
-	
+	jp .outer_loop
 
 ;input hl = offset, de = len
 ;output a = cost
@@ -219,21 +244,24 @@ _write_bit:
 	ld a,1
 bit_mask:=$-1
 	rrca
-	jr nc,.noincrement
-	ld hl,(output_index)
-	inc hl
-	ld (hl),0
-	ld (bit_index),hl
-	inc hl
-	ld (output_index),hl
-.noincrement:
 	ld (bit_mask),a
 	ld d,a
+	jr nc,.noincrement
+	push de
+	ld de,(output_index)
+	ld hl,(ix+6)
+	add hl,de
+	ld (hl),0
+	ld (bit_index),de
+	inc de
+	ld (output_index),de
+	pop de
+.noincrement:
 	ld a,e
 	or a,a
 	ret z
 	ld a,d
-	ld hl,(ix+3)
+	ld hl,(ix+6)
 	ld de,0
 bit_index:=$-3
 	add hl,de
@@ -243,13 +271,26 @@ bit_index:=$-3
 
 ;input a = byte to write
 _write_byte:
-	ld hl,(ix+3)
+	ld hl,(ix+6)
 	ld bc,0
 output_index:=$-3
 	add hl,bc
 	ld (hl),a
 	inc bc
 	ld (output_index),bc
+	ret
+
+
+waitkey:
+	call ti.GetCSC
+	or a,a
+	jr z,waitkey
+	push af
+.loop:
+	call ti.GetCSC
+	or a,a
+	jr nz,.loop
+	pop af
 	ret
 
 ;try this if you can lol

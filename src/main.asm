@@ -6,28 +6,7 @@ format ti executable "IC3CRAFT"
 kb_Data:=$F50010
 
 
-gen_map_temp:=ti.pixelShadow
-player_data:=gen_map_temp+64
-player_inv_data:=player_data+64
-chest_inv_data:=player_inv_data+72
-game_flags:=chest_inv_data+72
-map_ptr:=game_flags+1
-map_len:=map_ptr+3
-game_time:=map_len+3
-tex_ptrs:=game_time+3
-world_file:=tex_ptrs+768
-behavior_pack:=world_file+8
-texture_pack:=behavior_pack+8
-world_chunk_gen_flags:=texture_pack+8
-world_data:=world_chunk_gen_flags+32
-;next:=world_data+$FFE8
 
-assert world_data < ti.pixelShadow+3578
-
-o_player_x:=0
-o_player_y:=3
-o_player_z:=6
-o_player_inv:=64
 
 clibs_program
 
@@ -221,6 +200,7 @@ main_loop:
 	ld (iy+o_player_x),de
 	jp main_loop
 .exit:
+	call save_world_layer
 	jp wait_key_unpress
 
 error_draw:
@@ -263,23 +243,27 @@ full_exit:
 	
 	ld hl,ti.pixelShadow
 	ld bc,69090
-	call ti._memclear
+	call memclear
 end_program
 
+
+memclear:
+	push hl
+	pop de
+	inc de
+	ld (hl),0
+	ldir
+	ret
 
 draw_map_tiles:
 	push ix
 	ld ix,player_data
-	ld b,(ix+o_player_y)
-	ld c,8
-	mlt bc
-	ld a,(ix+o_player_x)
-	call ti.AddHLAndA
 	ld hl,world_data
 	add hl,bc
 	ld c,(ix+o_player_y)
-	ld b,8
+	ld b,128
 	mlt bc
+	add hl,bc
 	add hl,bc
 	ld a,(ix+o_player_x)
 	call ti.AddHLAndA
@@ -457,6 +441,17 @@ load_textures:
 	ret
 
 load_behaviours:
+	c_call ti_Open, behavior_pack,Modes.R
+	or a,a
+	ret z
+	ld c,a
+	push bc
+	call ti_GetDataPtr
+	ld (behaviours_ptr),hl
+	call ti_Close
+	pop bc
+	xor a,a
+	ld (generate_world_layer),a ;behaviours are loaded
 	ret
 
 ; world saving/loading
@@ -464,7 +459,7 @@ load_behaviours:
 load_world_layer:
 	ld hl,world_chunk_gen_flags ;clear old data
 	ld bc,65536+32
-	call ti._memclear
+	call memclear
 	ld hl,Modes.R
 	push hl
 	ld hl,world_file
@@ -477,6 +472,8 @@ load_world_layer:
 	ld l,a
 	push hl
 	call ti_GetDataPtr
+	ld bc,8 ;skip the header for now
+	add hl,bc
 	ex (sp),hl
 	push hl
 	call ti_Close
@@ -488,19 +485,23 @@ load_world_layer:
 	ret
 
 save_world_layer:
+	ld hl,$D40000 ;force drawing from the LCD so we can use the back buffer as RAM
+	ld ($E30010),hl
+	call gfx_ZeroScreen
+	c_call gfx_PrintStringXY, str_SavingWorld,1,1
 	ld hl,65536+32
 	push hl
 	ld hl,.worldLength
 	push hl
-	ld hl,$D52C00
-	push hl
 	ld hl,world_chunk_gen_flags
+	push hl
+	ld hl,$D52C00
 	push hl
 	call _zx7_Compress
 	pop bc,bc,bc,bc
 	ld hl,Modes.W
 	push hl
-	ld hl,Files.TempFile
+	ld hl,world_file
 	push hl
 	call ti_Open
 	pop bc,bc
@@ -508,6 +509,7 @@ save_world_layer:
 	ret z
 	ld c,a
 	push bc
+	c_call ti_Write,str_WorldVersionNumber,8,1
 	ld hl,0
 .worldLength:=$-3
 	push hl
@@ -519,66 +521,299 @@ save_world_layer:
 	pop bc,bc,bc
 	call ti_Close
 	pop bc
-	ld hl,Files.TempFile-1
-	call ti.Mov9ToOP1
+	ld hl,ti.OP1
+	ld (hl),ti.AppVarObj
+	ex hl,de
+	inc de
+	ld hl,world_file
+	call ti.Mov8b
 	jp _Arc_Unarc
-
-; return nz if found, z if not found. HL = chunk
-get_chunk:
-	ld hl,world_data
-.loop:
-	ld a,0
-.x:=$-1
-	cp a,(hl)
-	inc hl
-	jr nz,.next
-	ld a,0
-.y:=$-1
-	cp a,(hl)
-	jr z,.found
-.next:
-	inc hl
-	ld bc,0
-world_end_ptr:=$-3
-	or a,a
-	sbc hl,bc
-	add hl,bc
-	jr c,.loop
-	xor a,a
-	sbc hl,hl
-	ret
-.found:
-	dec hl
-	xor a,a
-	inc a
-	ret
 
 ; world generation
 
+;generates chunks around the player
+;no arguments.
 generate_world_layer:
+	ret                ;will be smc'd away once behaviours are loaded
+	ld iy,(behaviours_ptr)
+	ld ix,player_data
+	ld l,(iy+o_player_x)
+	dec l
+	ld a,l
+	add a,3
+	ld (.end_x),a
+	ld (.end_x_2),a
+	ld h,(iy+o_player_y)
+	dec h
+	ld a,h
+	add a,3
+	ld (.end_y),a
+.loop:
+	ld (chunk_ptr),hl
+	rlc h
+	ld a,l
+	and a,7
+	add a,a
+	add a,a
+	add a,a
+	add a,$46
+	ld (.bitsmc),a
+	ld a,l
+	rrca
+	rrca
+	rrca
+	add a,h
+	ld hl,world_chunk_gen_flags
+	call ti.AddHLAndA
+	bit 0,(hl)
+.bitsmc:=$-1
+	call z,gen_chunk
+	ld hl,(chunk_ptr)
+	dec l
+	ld a,l
+	cp a,0
+.end_x:=$-1
+	jr nz,.loop
+	ld l,0
+.end_x_2:=$-1
+	dec h
+	ld a,h
+	cp a,0
+.end_y:=$-1
+	jr nz,.loop
 	ret
 
-; X,Y must already be set in gen_map_temp
-; chunk_seed = world_seed bitxor (X + Y*256) * 8
-generate_chunk:
-	xor a,a
-	ld (gen_map_temp+2),a
-	ld hl,(gen_map_temp)
-	add hl,hl
-	add hl,hl
-	add hl,hl               ; multiply by 8
+gen_chunk:
+	call set_chunk_seed
+	call get_biome_layout
 	ex hl,de
-	ld hl,chunk_seed+1
-	ld (hl),de
-	dec hl
+	ld hl,0
+chunk_ptr:=$-3
+;multiply coordinates by 16
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	ld bc,world_data
+	add hl,bc
+;fill chunk with blocks
+	push hl
+	ld hl,(chunk_seed)
+	ld a,(chunk_seed+3)
+	call seed_random
+	pop hl
+	ld bc,$1010
+	ex hl,de
+.fillchunk:
+	push bc
+	call random_number
+	ld a,l
+	and a,$F
+	ld hl,0
+biome_blocks:=$-3
+	call ti.AddHLAndA
+	ldi
+	pop bc
+	djnz .fillchunk
+	ld b,$10
+	dec c
+	jr nz,.fillchunk
+
+;place some features
+	call random_number
+	ld a,l
+	or a,a
+	jr nz,.putfeatureloop
+	ld a,4
+.putfeatureloop:
+	push af
+	call .put_feature
+	pop af
+	dec a
+	jr nz,.putfeatureloop
+
+
+.put_feature:
+	push af
+	call random_number
+	ld iy,(behaviours_ptr)
+	ld a,l
+	ld c,(iy+bvr_jt_feature_gen_l)
+	call _bremu
+	ld hl,(iy+bvr_jt_feature_gen)
+	call ti.AddHLAndA
+	ld a,(hl)
+	or a,a
+	jr z,.one_block
+	ld b,a
+	and a,$F
+	ld (.feat_x),a
+	ld c,a
+	xor a,a
+	sub a,c
+	ld (.feat_dx),a
+	ld a,b
+	rlca
+	rlca
+	rlca
+	rlca
+	and a,$F
+	ld b,a
+	inc hl
+	pop af
+	push de
+	push bc
+	call random_number
+	mlt hl
+	ld a,l
+	pop bc
+	push bc
+	rlc b
+	rlc b
+	rlc b
+	rlc b
+	sub a,b
+	sub a,c
+	pop bc
+	ld hl,(chunk_ptr)
+	call index_chunk_HL_A
+	ex hl,de
+	pop hl
+	inc hl ;skip feature size byte
+	inc hl ;skip feature extra byte (unused)
+.featloop:
+	push bc
+	ld bc,0
+.feat_x:=$-3
+	ldir
+	ld bc,0
+.feat_dx:=$-3
+	ex hl,de
+	add hl,bc
+	ex hl,de
+	pop bc
+	djnz .featloop
+	ret
+.one_block:
+	call random_number
+	mlt hl
+	ld b,a
+	ld a,l
+	ld hl,(chunk_ptr)
+	call index_chunk_HL_A
+	ld (hl),b
+	ret
+
+index_chunk_HL_A:
+	push bc
+	push hl
+	ld bc,0
+	ld c,a
+	and a,$F0
+	ld l,a
+	ld a,c
+	and a,$0F
+	ld c,a
+	ld h,16
+	mlt hl
+	add hl,bc
+	pop bc
+	add hl,bc
+	pop bc
+	ret
+
+seed_random:
+	ld	(__state), hl
+	ld	(__state+3),a
+	ld	b, 12
+__setstateloop:
+	inc	hl
+	ld	(hl), b
+	djnz	__setstateloop
+	ret
+
+random_number:
+	ld	iy, __state
+	ld	hl, (iy+0*4+0)
+	push	hl
+	ld	hl, (iy+0*4+2)
+	push	hl
+	lea	hl, iy+1*4
+	lea	de, iy+0*4
+	ld	bc, 3*4
+	ldir
+	pop	bc
+	pop	de
+	ld	h, d
+	ld	l, e
+	add	hl, hl
+	add	hl, hl
+	add	hl, hl
+	ld	a, b
+	xor	a, h
+	ld	h, a
+	xor	a, (iy+3*4+2)
+	ld	(iy+3*4+3), a
+	ld	b, a
+	ld	a, c
+	xor	a, l
+	ld	l, a
+	xor	a, (iy+3*4+1)
+	ld	(iy+3*4+2), a
+	xor	a, a
+	add.s	hl, hl
+	adc	a, a
+	add.s	hl, hl
+	adc	a, a
+	add.s	hl, hl
+	adc	a, a
+	xor	a, d
+	xor	a, (iy+3*4+0)
+	ld	(iy+3*4+1), a
+	ld	a, e
+	xor	a, h
+	ld	(iy+3*4+0), a
+	ld	hl, (iy+3*4)
+	ld	a, b
+	ld	de, (iy+2*4)
+	add	hl, de
+	ld	e, (iy+2*4+3)
+	ret
+
+__state:
+	db	10h, 0Fh, 0Eh, 0Dh
+	db	0Ch, 0Bh, 0Ah, 09h
+	db	08h, 07h, 06h, 05h
+	db	04h, 03h, 02h, 01h
+
+
+;return hl = 16 block list of biome base blocks
+get_biome_layout:
+	ld a,(chunk_seed+1)
+	ld c,(iy+bvr_jt_biome_l)
+	call _bremu
+	ld bc,0
+	ld c,a
+	ld hl,(iy+bvr_jt_biome_index)
+	add hl,bc
+	add hl,bc
+	add hl,bc
+	ld hl,(hl)
+	lea bc,iy
+	add hl,bc
+	ret
+
+
+;set chunk seed --> (world_seed bitxor (X + Y<<8)<<3) - 11
+;input l=x,h=y
+set_chunk_seed:
+	add hl,hl
+	add hl,hl
+	add hl,hl
+	ld (chunk_seed),hl
 	ld de,world_seed
-	ld a,(gen_map_temp+1)
-	rlca
-	rlca
-	rlca
-	and a,7
-	ld (hl),a
-	ld b,4
+	ld hl,chunk_seed
+	ld b,3
 .xorloop:
 	ld a,(de)
 	xor a,(hl)
@@ -586,11 +821,28 @@ generate_chunk:
 	inc hl
 	inc de
 	djnz .xorloop
-	
-	ld de,(world_end_ptr)
-	ld bc,66
-	ldir
+	ld hl,chunk_seed
+	ld a,(hl)
+	sub a,11
+	ld (hl),a
+	ret nc
+	inc hl
+	ld b,3
+.subtractloop:
+	ld c,(hl)
+	ld a,c
+	dec c
+	ld (hl),c
+	or a,a
+	ret nz
+	inc hl
+	djnz .subtractloop
 	ret
+
+get_biome:
+	
+	ret
+
 world_seed:      ;32-bit world seed
 	db 4 dup 0
 chunk_seed:      ;32-bit chunk seed
@@ -684,5 +936,7 @@ GetKey:
 
 include 'arc_unarc.asm'
 include 'zx7_Decompress.asm'
-include 'compressor.asm'
+;include 'zx7_Compress.asm'
+include 'compressor.c.src'
+include 'bremu.asm'
 include 'data.asm'
