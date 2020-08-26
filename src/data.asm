@@ -22,10 +22,12 @@ Files:
 		db "ICYbvr00"
 	.DefaultTexturePack:
 		db "ICYtxp00"
+	.DefaultPlayerFile:
+		db "ICYusr00"
 	.PackFile:
 		db "ICYpacks"
-	.TempFile:=$+1
-		db ti.AppVarObj,"__icytmp",0
+	.TempFile:
+		db "__icytmp"
 
 Modes:
 	.R:
@@ -38,24 +40,30 @@ str_SavingWorld:
 str_WorldVersionNumber:
 	db "ICYv000",0
 
-gen_map_temp:=ti.pixelShadow
+gen_map_temp:=ti.textShadow
 player_data:=gen_map_temp+64
 player_inv_data:=player_data+64
-chest_inv_data:=player_inv_data+72
-game_flags:=chest_inv_data+72
+game_flags:=player_inv_data+72
 map_ptr:=game_flags+1
 map_len:=map_ptr+3
 game_time:=map_len+3
-tex_ptrs:=game_time+3
-world_file:=tex_ptrs+768
+world_file:=game_time+3
 behavior_pack:=world_file+8
 texture_pack:=behavior_pack+8
-behaviours_ptr:=texture_pack+8
-world_chunk_gen_flags:=behaviours_ptr+3
-world_data:=world_chunk_gen_flags+32
-;next:=world_data+$FFE8
+player_file:=texture_pack+8
+behaviours_ptr:=player_file+8
 
-assert world_data < ti.pixelShadow+69090-(65536+32)
+assert behaviours_ptr+3 < ti.textShadow+260
+
+chest_inv_data:=ti.cmdShadow
+
+tex_ptrs:=ti.cursorImage+256
+
+world_chunk_gen_flags:=ti.pixelShadow
+world_data:=world_chunk_gen_flags+32
+;next:=world_data+65536
+
+assert world_data+65536 < ti.pixelShadow+69090
 
 o_player_x:=0
 o_player_y:=3

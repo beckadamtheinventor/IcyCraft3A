@@ -113,6 +113,7 @@ menu_loop:
 
 main:
 	ret                ; this will be smc'd into a NOP once data is properly loaded
+	call load_player
 	call load_world_layer
 main_loop:
 	call gfx_ZeroScreen
@@ -200,6 +201,7 @@ main_loop:
 	ld (iy+o_player_x),de
 	jp main_loop
 .exit:
+	call save_player
 	call save_world_layer
 	jp wait_key_unpress
 
@@ -244,6 +246,14 @@ full_exit:
 	ld hl,ti.pixelShadow
 	ld bc,69090
 	call memclear
+	ld hl,ti.cursorImage
+	ld bc,1024
+	call memclear
+	call ti.ClrTxtShd
+	ld hl,ti.textShadow
+	ld de,ti.cmdShadow
+	ld bc,260
+	ldir
 end_program
 
 
@@ -255,40 +265,77 @@ memclear:
 	ldir
 	ret
 
+
 draw_map_tiles:
 	push ix
 	ld ix,player_data
 	ld hl,world_data
-	add hl,bc
-	ld c,(ix+o_player_y)
-	ld b,128
-	mlt bc
-	add hl,bc
-	add hl,bc
+	ld bc,0
 	ld a,(ix+o_player_x)
-	call ti.AddHLAndA
+	sub a,7
+	ld c,a
+	ld a,(ix+o_player_y)
+	sub a,7
+	ld b,a
+	add hl,bc
+	ex hl,de
+	ld bc,$0F0F
+	xor a,a
+	sbc hl,hl
+.loop:
+	call draw_tile_2x ;expected to not destroy hl, de, bc, and a.
+	inc de
+	push bc
+	ld bc,16
+	add hl,bc
+	pop bc
+map_tile_draw_function:=$-3
+	djnz .loop
+	ld b,$0F
+	or a,a
+	sbc hl,hl
+	add a,16
+	dec c
+	jr nz,.loop
+
 	pop ix
 	ret
-	
-.sub4div8and7:
-	dec hl
-	dec hl
-	dec hl
-	dec hl ;X-4
-	rr h
-	rr l
-	rr h
-	rr l
-	rr h
-	rr l
-	ld a,l
-	and a,7 ;get chunk coordinate
-	ret
 
-;input b=x,c=y
-get_map:
-	ld hl,world_data
-	
+
+draw_tile_2x:
+	push bc
+	push de
+	ld c,2
+	push bc
+	push bc
+	ld c,a
+	push bc
+	push hl
+	ld a,(de)
+	cp a,$FF
+max_loaded_tile:=$-1
+	jr nc,.dontdraw
+	or a,a
+	sbc hl,hl
+	ld l,a
+	push hl
+	pop bc
+	add hl,hl
+	add hl,bc
+	ld bc,tex_ptrs
+	add hl,bc
+	ld hl,(hl)
+	push hl
+	call gfx_ScaledSprite_NoClip
+	pop bc
+.dontdraw:
+	pop hl
+	pop bc
+	ld a,c
+	pop bc
+	pop bc
+	pop de
+	pop bc
 	ret
 
 draw_menu:
@@ -369,13 +416,7 @@ draw_background:
 
 ; configs
 load_packs:
-	ld hl,Modes.R
-	push hl
-	ld hl,Files.PackFile
-	push hl
-	call ti_Open
-	pop bc
-	pop bc
+	c_call ti_Open, Files.PackFile, Modes.R
 	or a,a
 	jr z,.default
 	ld l,a
@@ -390,7 +431,7 @@ load_packs:
 .default:
 	ld hl,Files.DefaultWorldFile
 	ld de,world_file
-	ld bc,24
+	ld bc,32
 	ldir
 	ret
 
@@ -419,6 +460,7 @@ load_textures:
 	pop bc,de,hl
 	add hl,de
 	ld (.filemax),hl
+	xor a,a
 	ld hl,tex_ptrs
 .tex_loop:
 	ld (hl),de
@@ -430,11 +472,13 @@ load_textures:
 	add hl,bc
 	ld bc,0
 .filemax:=$-3
+	inc a
 	or a,a
 	sbc hl,bc
 	add hl,bc
 	ex hl,de
 	jr c,.tex_loop
+	ld (max_loaded_tile),a
 	xor a,a
 	ld (draw_background),a  ; textures are loaded
 	ld (main),a
@@ -453,6 +497,37 @@ load_behaviours:
 	xor a,a
 	ld (generate_world_layer),a ;behaviours are loaded
 	ret
+
+
+; save/load player data
+
+save_player:
+	c_call ti_Open, player_file,Modes.W
+	or a,a
+	ret z
+	ld c,a
+	push bc
+	c_call ti_Write, player_data, 64+72, 1
+	call ti_Close
+	pop bc
+	ld hl,player_file
+	jq ArcAppvarHL
+
+load_player:
+	c_call ti_Open, player_file,Modes.R
+	or a,a
+	jr z,.default
+	ld c,a
+	push bc
+	c_call ti_Read, player_data, 64+72, 1
+	call ti_Close
+	pop bc
+	ret
+.default:
+	ld hl,player_data
+	ld bc,64+72
+	jq memclear
+
 
 ; world saving/loading
 
@@ -489,13 +564,13 @@ save_world_layer:
 	ld ($E30010),hl
 	call gfx_ZeroScreen
 	c_call gfx_PrintStringXY, str_SavingWorld,1,1
-	ld hl,65536+32
+	ld hl,65536+32 ;source length
 	push hl
-	ld hl,.worldLength
+	ld hl,.worldLength ;pointer to destination length
 	push hl
-	ld hl,world_chunk_gen_flags
+	ld hl,world_chunk_gen_flags ;source
 	push hl
-	ld hl,$D52C00
+	ld hl,$D52C00 ;destination
 	push hl
 	call _zx7_Compress
 	pop bc,bc,bc,bc
@@ -521,12 +596,14 @@ save_world_layer:
 	pop bc,bc,bc
 	call ti_Close
 	pop bc
-	ld hl,ti.OP1
-	ld (hl),ti.AppVarObj
-	ex hl,de
-	inc de
 	ld hl,world_file
+
+ArcAppvarHL:
+	ld de,ti.OP1+1
 	call ti.Mov8b
+ArcAppvarOP1:
+	ld a,ti.AppVarObj
+	ld (ti.OP1),a
 	jp _Arc_Unarc
 
 ; world generation
@@ -534,54 +611,93 @@ save_world_layer:
 ;generates chunks around the player
 ;no arguments.
 generate_world_layer:
-	ret                ;will be smc'd away once behaviours are loaded
-	ld iy,(behaviours_ptr)
-	ld ix,player_data
-	ld l,(iy+o_player_x)
-	dec l
-	ld a,l
-	add a,3
-	ld (.end_x),a
-	ld (.end_x_2),a
-	ld h,(iy+o_player_y)
-	dec h
-	ld a,h
-	add a,3
-	ld (.end_y),a
-.loop:
-	ld (chunk_ptr),hl
-	rlc h
-	ld a,l
+	nop                ;will be smc'd away once behaviours are loaded
+	ld hl,world_data
+	ld (hl),$02
+	ld bc,65536
+	push hl
+	pop de
+	inc de
+	ldir
+	ld a,(o_player_x)
+	and a,$F0
+	ld c,a
+	ld a,(o_player_y)
+	and a,$F0
+	ld b,a
+
+	ld hl,world_data
+	add hl,bc
+	push hl
+	push bc
+	pop hl
+	add hl,hl
+	ld a,c
 	and a,7
 	add a,a
 	add a,a
 	add a,a
 	add a,$46
 	ld (.bitsmc),a
-	ld a,l
-	rrca
-	rrca
-	rrca
-	add a,h
+	add a,$80
+	ld (.bitsmc2),a
+	ld a,h ;offset of byte to check
 	ld hl,world_chunk_gen_flags
 	call ti.AddHLAndA
 	bit 0,(hl)
 .bitsmc:=$-1
-	call z,gen_chunk
-	ld hl,(chunk_ptr)
-	dec l
+	pop iy
+	ret nz ;chunk is already generated
+	set 0,(hl)
+.bitsmc2:=$-1
+
+	call set_chunk_seed
+	call random_number
+	push hl
 	ld a,l
-	cp a,0
-.end_x:=$-1
-	jr nz,.loop
-	ld l,0
-.end_x_2:=$-1
-	dec h
+	call .place_tree
+	pop hl
 	ld a,h
-	cp a,0
-.end_y:=$-1
-	jr nz,.loop
+	cp a,l
+	ret z
+.place_tree:
+	ld bc,0
+	ld c,a
+	and a,$F
+	ld b,a
+	ld a,c
+	rrca
+	rrca
+	rrca
+	rrca
+	and a,$F
+	ld c,a
+	lea hl,iy
+	add hl,bc
+	ld a,28
+	dec hl
+	ld (hl),a
+	inc hl
+	ld (hl),13
+	inc hl
+	ld (hl),a
+	ld bc,254
+	add hl,bc
+	ld (hl),a
+	inc hl
+	ld (hl),a
+	inc hl
+	ld (hl),a
+	inc hl
+	ld bc,-515
+	add hl,bc
+	ld (hl),a
+	inc hl
+	ld (hl),a
+	inc hl
+	ld (hl),a
 	ret
+
 
 gen_chunk:
 	call set_chunk_seed

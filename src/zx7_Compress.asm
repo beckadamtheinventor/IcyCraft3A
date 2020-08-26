@@ -16,7 +16,44 @@ _zx7_Compress:
 	ld hl,(ix+9)
 	ld a,(hl)
 	call _write_byte
+	ld hl,(ix+9)
+	ld bc,(ix+15)
+	add hl,bc
+	ld (input_max_ptr),hl
+	ld c,0
+	push bc
+	call gfx_SetDraw
+	ld l,$FF
+	ex (sp),hl
+	call gfx_SetColor
+	ld hl,28
+	ex (sp),hl
+	ld hl,260
+	push hl
+	ld hl,99
+	push hl
+	ld hl,30
+	push hl
+	call gfx_Rectangle
+	pop bc,bc,bc
+	ld l,$BF
+	ex (sp),hl
+	call gfx_SetColor
+	pop bc
 .loop:
+	ld hl,24
+	push hl
+	ld hl,(input_index-1)
+	ld l,0
+	ld bc,(ix+15)
+	call ti._idivu
+	push hl
+	ld hl,101
+	push hl
+	ld hl,32
+	push hl
+	call gfx_FillRectangle
+	pop bc,bc,bc,bc
 	call _get_match
 
 	ld a,(best_cost)
@@ -28,10 +65,11 @@ _zx7_Compress:
 	call _write_bit
 	ld hl,0
 input_index:=$-3
+	inc hl
+	ld (input_index),hl
 	ld bc,(ix+9)
 	add hl,bc
-	inc bc
-	ld (input_index),bc
+	dec hl
 	ld a,(hl)
 	call _write_byte
 	jq .next
@@ -86,26 +124,24 @@ input_index:=$-3
 	call _write_byte
 	jr .advancepattern
 .over128:
-	inc hl
 	ld a,l
 	set 7,a
 	call _write_byte
-
-.advancepattern:
 	ld hl,(ix-9)
-	ld de,-128
+	ld de,-129
 	add hl,de
 	rl l
 	rl h
 	ld c,h
 	ld b,4
-.patternlenloop:
+.patternoffsetloop:
 	ld a,c
 	and a,1
 	call _write_bit
 	rr c
-	djnz .patternlenloop
+	djnz .patternoffsetloop
 
+.advancepattern:
 	ld hl,(input_index)
 	ld bc,(ix-6)
 	add hl,bc
@@ -166,6 +202,7 @@ _get_match:
 .outer_loop:
 	ld hl,(ix-3)
 	ld bc,(ix-12)
+	inc bc
 .outer_loop_entry:
 	ld a,(hl)
 	dec hl
@@ -174,8 +211,23 @@ _get_match:
 	ret po
 	ld (ix-3),hl
 	ld (ix-12),bc
-	ld de,(ix-15)
+	ld de,0
+input_max_ptr:=$-3
 	ld bc,MAX_LEN
+	add hl,bc
+	or a,a
+	sbc hl,de
+	jr c,.maxpatternlen
+	add hl,de
+	ex hl,de
+	or a,a
+	sbc hl,de
+	push hl
+	pop bc
+.maxpatternlen:
+	ld de,(ix-15)
+	ld hl,(ix-3)
+	push bc
 .loop:
 	ld a,(de)
 	inc de
@@ -183,7 +235,7 @@ _get_match:
 	jr nz,.end_of_pattern
 	jp pe,.loop
 .end_of_pattern:
-	ld hl,MAX_LEN
+	pop hl
 	or a,a
 	sbc hl,bc ;hl = match_len
 	push hl
@@ -209,7 +261,8 @@ current_cost:=$-3
 	pop de ;match_offset
 	jp c,.outer_loop
 .new_cost:
-	ld (best_cost),bc
+	ld a,c
+	ld (best_cost),a
 	ld (ix-6),hl ;match_len
 	ld (ix-9),de ;match_offset
 	jp .outer_loop
@@ -221,14 +274,17 @@ _count_bits:
 	ld bc,128
 	or a,a
 	sbc hl,bc
+	add hl,bc
 	jr c,.offsetunder128
 	add a,4
 .offsetunder128:
 	ex hl,de
-	ld de,2
+	dec hl
+	ld de,1
+	or a,a
 .gammaloop:
-	rr h
-	rr l
+	ld bc,1
+	call ti._ishru
 	or a,a
 	sbc hl,de
 	ret c
